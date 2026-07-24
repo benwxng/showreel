@@ -36,9 +36,6 @@ const DEFAULT_VIDEO_DURATION = 5
 const BACKGROUNDS = [
   { label: 'Ink', value: '#111111' },
   { label: 'Paper', value: '#ffffff' },
-  { label: 'Slate', value: '#9ba3ad' },
-  { label: 'Clay', value: '#b88873' },
-  { label: 'Cobalt', value: '#405de6' },
 ]
 
 const ASPECT_VALUES: Record<ShowreelSettings['aspectRatio'], string> = {
@@ -929,40 +926,6 @@ export default function ShowreelEditor() {
           aria-hidden={!isInspectorOpen}
         >
           <section className="sr-inspector-section">
-            {selectedItem ? (
-              <div className="sr-control">
-                <label htmlFor="sr-duration">Duration</label>
-                <div className="sr-number-field">
-                  <input
-                    id="sr-duration"
-                    type="number"
-                    min="0.1"
-                    max="60"
-                    step="0.5"
-                    value={selectedItem.duration}
-                    onChange={(event) => {
-                      const duration = Number(event.currentTarget.value)
-                      if (Number.isFinite(duration)) {
-                        updateItem(selectedItem.id, {
-                          duration: Math.min(60, Math.max(0.1, duration)),
-                        })
-                      }
-                    }}
-                  />
-                  <span>sec</span>
-                </div>
-                <p>
-                  {selectedItem.type === 'video'
-                    ? 'The clip ends at this time or its natural end.'
-                    : 'How long this image stays on screen.'}
-                </p>
-              </div>
-            ) : (
-              <p className="sr-inspector-empty">Select an item to edit it.</p>
-            )}
-          </section>
-
-          <section className="sr-inspector-section">
             <fieldset className="sr-control sr-color-control">
               <legend>Background</legend>
               <div className="sr-swatches">
@@ -1074,6 +1037,35 @@ export default function ShowreelEditor() {
                 ))}
               </div>
             </fieldset>
+          </section>
+
+          <section className="sr-inspector-section">
+            {selectedItem ? (
+              <div className="sr-control">
+                <label htmlFor="sr-duration">Duration</label>
+                <div className="sr-number-field">
+                  <input
+                    id="sr-duration"
+                    type="number"
+                    min="0.1"
+                    max="60"
+                    step="0.1"
+                    value={selectedItem.duration}
+                    onChange={(event) => {
+                      const duration = Number(event.currentTarget.value)
+                      if (Number.isFinite(duration)) {
+                        updateItem(selectedItem.id, {
+                          duration: Math.min(60, Math.max(0.1, duration)),
+                        })
+                      }
+                    }}
+                  />
+                  <span>s</span>
+                </div>
+              </div>
+            ) : (
+              <p className="sr-inspector-empty">Select an item to edit it.</p>
+            )}
           </section>
         </aside>
       </div>

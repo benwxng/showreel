@@ -344,8 +344,9 @@ svg {
     background-color 240ms ease,
     box-shadow 240ms ease,
     width 420ms var(--sr-ease),
-    aspect-ratio 420ms var(--sr-ease);
-  will-change: width, aspect-ratio;
+    aspect-ratio 420ms var(--sr-ease),
+    transform 300ms var(--sr-ease);
+  will-change: width, aspect-ratio, transform;
   grid-column: 2;
 }
 
@@ -502,6 +503,11 @@ svg {
 .sr-stage-empty {
   border-color: transparent;
   background: var(--sr-stage-surround);
+}
+
+.sr-stage-empty:hover,
+.sr-stage-empty:focus-within {
+  transform: scale(1.015);
 }
 
 .sr-stage-dragging {
@@ -1018,9 +1024,10 @@ svg {
 }
 
 .sr-number-field input {
-  min-width: 0;
+  width: 70px;
+  min-width: 70px;
   height: 100%;
-  flex: 1;
+  flex: 0 0 70px;
   padding: 0 9px;
   border: 0;
   outline: 0;
@@ -1029,7 +1036,7 @@ svg {
 }
 
 .sr-number-field span {
-  padding-right: 9px;
+  padding-right: 0;
   color: var(--sr-quiet);
   font-size: 10px;
 }
