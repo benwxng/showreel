@@ -17,6 +17,7 @@ export type ShowreelItem = {
   name: string
   type: 'image' | 'video'
   src: string
+  file: File
   duration: number
 }
 
@@ -31,11 +32,36 @@ type DropPosition = 'before' | 'after'
 type ExportQuality = '720p' | '1080p'
 
 const DEFAULT_IMAGE_DURATION = 0.3
-const DEFAULT_VIDEO_DURATION = 5
+const MIN_DURATION = 0.1
+const MAX_DURATION = 3
+const DEFAULT_VIDEO_DURATION = MAX_DURATION
+const HEIC_CONVERTER_SRC =
+  'https://cdn.jsdelivr.net/npm/heic-to@1.4.2/dist/iife/heic-to.js'
+const MEDIA_DATABASE_NAME = 'showreel-media'
+const MEDIA_DATABASE_VERSION = 1
+const MEDIA_STORE_NAME = 'sequence-items'
+
+type StoredShowreelItem = {
+  id: string
+  name: string
+  type: ShowreelItem['type']
+  blob: Blob
+  duration: number
+  order: number
+  lastModified: number
+}
+
+type HeicConverter = (options: {
+  blob: Blob
+  type: 'image/jpeg'
+  quality: number
+}) => Promise<Blob | Blob[]>
+
+let heicConverterPromise: Promise<HeicConverter> | null = null
 
 const BACKGROUNDS = [
-  { label: 'Ink', value: '#111111' },
   { label: 'Paper', value: '#ffffff' },
+  { label: 'Ink', value: '#111111' },
 ]
 
 const ASPECT_VALUES: Record<ShowreelSettings['aspectRatio'], string> = {
@@ -90,6 +116,139 @@ function createItemId() {
   return `media-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function isHeicFile(file: File) {
+  return (
+    file.type === 'image/heic' ||
+    file.type === 'image/heif' ||
+    /\.(heic|heif)$/i.test(file.name)
+  )
+}
+
+function isSupportedMediaFile(file: File) {
+  return (
+    isHeicFile(file) ||
+    file.type.startsWith('image/') ||
+    file.type.startsWith('video/')
+  )
+}
+
+function loadHeicConverter() {
+  const converterWindow = window as Window & { HeicTo?: HeicConverter }
+  if (converterWindow.HeicTo) return Promise.resolve(converterWindow.HeicTo)
+  if (heicConverterPromise) return heicConverterPromise
+
+  heicConverterPromise = new Promise<HeicConverter>((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = HEIC_CONVERTER_SRC
+    script.async = true
+    script.dataset.heicConverter = 'true'
+    script.onload = () => {
+      if (converterWindow.HeicTo) {
+        resolve(converterWindow.HeicTo)
+      } else {
+        reject(new Error('The HEIC converter did not initialize.'))
+      }
+    }
+    script.onerror = () => reject(new Error('The HEIC converter could not load.'))
+    document.head.appendChild(script)
+  }).catch((error) => {
+    heicConverterPromise = null
+    throw error
+  })
+
+  return heicConverterPromise
+}
+
+async function prepareMediaFile(file: File) {
+  if (!isHeicFile(file)) return file
+
+  const convertHeic = await loadHeicConverter()
+  const converted = await convertHeic({
+    blob: file,
+    type: 'image/jpeg',
+    quality: 0.92,
+  })
+  const jpeg = Array.isArray(converted) ? converted[0] : converted
+
+  if (!jpeg) throw new Error(`Could not convert ${file.name}.`)
+
+  return new File([jpeg], file.name.replace(/\.(heic|heif)$/i, '.jpg'), {
+    type: 'image/jpeg',
+    lastModified: file.lastModified,
+  })
+}
+
+function openMediaDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = window.indexedDB.open(
+      MEDIA_DATABASE_NAME,
+      MEDIA_DATABASE_VERSION,
+    )
+
+    request.onupgradeneeded = () => {
+      const database = request.result
+      if (!database.objectStoreNames.contains(MEDIA_STORE_NAME)) {
+        database.createObjectStore(MEDIA_STORE_NAME, { keyPath: 'id' })
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function loadStoredItems() {
+  const database = await openMediaDatabase()
+
+  try {
+    return await new Promise<StoredShowreelItem[]>((resolve, reject) => {
+      const transaction = database.transaction(MEDIA_STORE_NAME, 'readonly')
+      const request = transaction.objectStore(MEDIA_STORE_NAME).getAll()
+
+      request.onsuccess = () => {
+        resolve(
+          (request.result as StoredShowreelItem[]).sort(
+            (first, second) => first.order - second.order,
+          ),
+        )
+      }
+      request.onerror = () => reject(request.error)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+async function storeItems(items: ShowreelItem[]) {
+  const database = await openMediaDatabase()
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(MEDIA_STORE_NAME, 'readwrite')
+      const store = transaction.objectStore(MEDIA_STORE_NAME)
+
+      store.clear()
+      items.forEach((item, order) => {
+        const storedItem: StoredShowreelItem = {
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          blob: item.file,
+          duration: item.duration,
+          order,
+          lastModified: item.file.lastModified,
+        }
+        store.put(storedItem)
+      })
+
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+  } finally {
+    database.close()
+  }
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -103,6 +262,8 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export default function ShowreelEditor() {
   const [items, setItems] = useState<ShowreelItem[]>([])
+  const [imageDuration, setImageDuration] = useState(DEFAULT_IMAGE_DURATION)
+  const [hasLoadedStoredItems, setHasLoadedStoredItems] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -114,7 +275,7 @@ export default function ShowreelEditor() {
     position: DropPosition
   } | null>(null)
   const [settings, setSettings] = useState<ShowreelSettings>({
-    background: '#111111',
+    background: '#ffffff',
     padding: 56,
     fit: 'contain',
     aspectRatio: '16:9',
@@ -140,6 +301,8 @@ export default function ShowreelEditor() {
   const activeItem = activeIndex >= 0 ? items[activeIndex] : null
   const selectedItem =
     items.find((item) => item.id === selectedId) ?? activeItem
+  const selectedDuration =
+    selectedItem?.type === 'image' ? imageDuration : selectedItem?.duration
   const totalDuration = items.reduce((total, item) => total + item.duration, 0)
   const elapsedBeforeActive = items
     .slice(0, Math.max(activeIndex, 0))
@@ -176,6 +339,80 @@ export default function ShowreelEditor() {
     }
   }, [isInspectorOpen])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const restoreItems = async () => {
+      try {
+        const storedItems = await loadStoredItems()
+        if (cancelled) return
+
+        const storedImageDuration = storedItems.find(
+          (item) => item.type === 'image',
+        )?.duration
+        const restoredImageDuration = Math.min(
+          MAX_DURATION,
+          Math.max(MIN_DURATION, storedImageDuration ?? DEFAULT_IMAGE_DURATION),
+        )
+        const restoredItems = storedItems.map((item): ShowreelItem => {
+          const file = new File([item.blob], item.name, {
+            type: item.blob.type,
+            lastModified: item.lastModified,
+          })
+          const src = URL.createObjectURL(file)
+          objectUrlsRef.current.add(src)
+
+          return {
+            id: item.id,
+            name: item.name,
+            type: item.type,
+            src,
+            file,
+            duration:
+              item.type === 'image' ? restoredImageDuration : item.duration,
+          }
+        })
+
+        setImageDuration(restoredImageDuration)
+        setItems(restoredItems)
+        setSelectedId(restoredItems[0]?.id ?? null)
+        setActiveId(restoredItems[0]?.id ?? null)
+        if (restoredItems.length > 0) {
+          setStatus(
+            `${restoredItems.length} ${
+              restoredItems.length === 1 ? 'item' : 'items'
+            } restored.`,
+          )
+        }
+      } catch (error) {
+        console.error(error)
+        if (!cancelled) {
+          setStatus('Saved media could not be restored in this browser.')
+        }
+      } finally {
+        if (!cancelled) setHasLoadedStoredItems(true)
+      }
+    }
+
+    void restoreItems()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasLoadedStoredItems) return
+
+    const timeout = window.setTimeout(() => {
+      void storeItems(items).catch((error) => {
+        console.error(error)
+        setStatus('Media could not be saved for the next reload.')
+      })
+    }, 200)
+
+    return () => window.clearTimeout(timeout)
+  }, [hasLoadedStoredItems, items])
+
   const setPlaybackElapsed = useCallback((value: number) => {
     elapsedRef.current = value
     setElapsed(value)
@@ -192,19 +429,52 @@ export default function ShowreelEditor() {
     [],
   )
 
+  const updateImageDuration = useCallback((duration: number) => {
+    const nextDuration = Math.min(
+      MAX_DURATION,
+      Math.max(MIN_DURATION, duration),
+    )
+
+    setImageDuration(nextDuration)
+    setItems((current) =>
+      current.map((item) =>
+        item.type === 'image'
+          ? { ...item, duration: nextDuration }
+          : item,
+      ),
+    )
+  }, [])
+
   const addFiles = useCallback(
-    (files: FileList | File[]) => {
-      const supportedFiles = Array.from(files).filter(
-        (file) =>
-          file.type.startsWith('image/') || file.type.startsWith('video/'),
-      )
+    async (files: FileList | File[]) => {
+      const supportedFiles = Array.from(files).filter(isSupportedMediaFile)
 
       if (supportedFiles.length === 0) {
         setStatus('Choose image or video files to add to your showreel.')
         return
       }
 
-      const additions = supportedFiles.map((file): ShowreelItem => {
+      const heicCount = supportedFiles.filter(isHeicFile).length
+      if (heicCount > 0) {
+        setStatus(
+          `Converting ${heicCount} HEIC ${heicCount === 1 ? 'image' : 'images'}…`,
+        )
+      }
+
+      const preparedResults = await Promise.allSettled(
+        supportedFiles.map(prepareMediaFile),
+      )
+      const preparedFiles = preparedResults.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : [],
+      )
+      const failedCount = preparedResults.length - preparedFiles.length
+
+      if (preparedFiles.length === 0) {
+        setStatus('The HEIC image could not be converted. Please try again.')
+        return
+      }
+
+      const additions = preparedFiles.map((file): ShowreelItem => {
         const src = URL.createObjectURL(file)
         objectUrlsRef.current.add(src)
         return {
@@ -212,9 +482,10 @@ export default function ShowreelEditor() {
           name: file.name,
           type: file.type.startsWith('video/') ? 'video' : 'image',
           src,
+          file,
           duration: file.type.startsWith('video/')
             ? DEFAULT_VIDEO_DURATION
-            : DEFAULT_IMAGE_DURATION,
+            : imageDuration,
         }
       })
 
@@ -222,30 +493,26 @@ export default function ShowreelEditor() {
       setSelectedId((current) => current ?? additions[0].id)
       setActiveId((current) => current ?? additions[0].id)
       setStatus(
-        `${additions.length} ${additions.length === 1 ? 'item' : 'items'} added.`,
+        `${additions.length} ${additions.length === 1 ? 'item' : 'items'} added.${
+          failedCount > 0 ? ` ${failedCount} could not be converted.` : ''
+        }`,
       )
     },
-    [],
+    [imageDuration],
   )
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
       const imageFiles = Array.from(event.clipboardData?.items ?? [])
-        .filter(
-          (item) => item.kind === 'file' && item.type.startsWith('image/'),
-        )
+        .filter((item) => item.kind === 'file')
         .map((item) => item.getAsFile())
         .filter((file): file is File => file !== null)
+        .filter((file) => isHeicFile(file) || file.type.startsWith('image/'))
 
       if (imageFiles.length === 0) return
 
       event.preventDefault()
-      addFiles(imageFiles)
-      setStatus(
-        `${imageFiles.length} ${
-          imageFiles.length === 1 ? 'image' : 'images'
-        } pasted from the clipboard.`,
-      )
+      void addFiles(imageFiles)
     }
 
     window.addEventListener('paste', handlePaste)
@@ -510,12 +777,12 @@ export default function ShowreelEditor() {
     event.preventDefault()
     setIsDragOver(false)
     if (event.dataTransfer.files.length > 0) {
-      addFiles(event.dataTransfer.files)
+      void addFiles(event.dataTransfer.files)
     }
   }
 
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
-    if (event.currentTarget.files) addFiles(event.currentTarget.files)
+    if (event.currentTarget.files) void addFiles(event.currentTarget.files)
     event.currentTarget.value = ''
   }
 
@@ -526,7 +793,10 @@ export default function ShowreelEditor() {
 
     if (Math.abs(activeItem.duration - DEFAULT_VIDEO_DURATION) < 0.001) {
       updateItem(activeItem.id, {
-        duration: Math.max(0.5, Math.round(naturalDuration * 10) / 10),
+        duration: Math.min(
+          MAX_DURATION,
+          Math.max(0.5, Math.round(naturalDuration * 10) / 10),
+        ),
       })
     }
   }
@@ -611,7 +881,7 @@ export default function ShowreelEditor() {
         ref={fileInputRef}
         className="sr-file-input"
         type="file"
-        accept="image/*,video/*"
+        accept="image/*,video/*,.heic,.heif,image/heic,image/heif"
         multiple
         onChange={handleFileInput}
       />
@@ -699,6 +969,18 @@ export default function ShowreelEditor() {
                   <div className="sr-drop-overlay" aria-hidden="true">
                     Drop to add
                   </div>
+                )}
+                {items.length > 0 && (
+                  <button
+                    className="sr-frame-play"
+                    type="button"
+                    aria-label={isPlaying ? 'Pause showreel' : 'Play showreel'}
+                    aria-pressed={isPlaying}
+                    data-space-playback
+                    onClick={togglePlayback}
+                  >
+                    <PlayIcon paused={isPlaying} />
+                  </button>
                 )}
               </div>
               {items.length > 0 && (
@@ -1042,26 +1324,43 @@ export default function ShowreelEditor() {
           <section className="sr-inspector-section">
             {selectedItem ? (
               <div className="sr-control">
-                <label htmlFor="sr-duration">Duration</label>
-                <div className="sr-number-field">
-                  <input
-                    id="sr-duration"
-                    type="number"
-                    min="0.1"
-                    max="60"
-                    step="0.1"
-                    value={selectedItem.duration}
-                    onChange={(event) => {
-                      const duration = Number(event.currentTarget.value)
-                      if (Number.isFinite(duration)) {
-                        updateItem(selectedItem.id, {
-                          duration: Math.min(60, Math.max(0.1, duration)),
-                        })
-                      }
-                    }}
-                  />
-                  <span>s</span>
+                <div className="sr-control-label">
+                  <label htmlFor="sr-duration">
+                    {selectedItem.type === 'image'
+                      ? 'Image duration'
+                      : 'Clip duration'}
+                  </label>
+                  <output htmlFor="sr-duration">
+                    {selectedDuration?.toFixed(1)}s
+                  </output>
                 </div>
+                <input
+                  id="sr-duration"
+                  type="range"
+                  min={MIN_DURATION}
+                  max={MAX_DURATION}
+                  step="0.1"
+                  value={selectedDuration}
+                  style={
+                    {
+                      '--sr-range-progress': `${
+                        (((selectedDuration ?? MIN_DURATION) - MIN_DURATION) /
+                          (MAX_DURATION - MIN_DURATION)) *
+                          100
+                      }%`,
+                    } as CSSProperties
+                  }
+                  onChange={(event) => {
+                    const duration = Number(event.currentTarget.value)
+
+                    if (selectedItem.type === 'image') {
+                      updateImageDuration(duration)
+                      return
+                    }
+
+                    updateItem(selectedItem.id, { duration })
+                  }}
+                />
               </div>
             ) : (
               <p className="sr-inspector-empty">Select an item to edit it.</p>

@@ -350,6 +350,48 @@ svg {
   grid-column: 2;
 }
 
+.sr-editor:not(.sr-editor-empty) .sr-stage {
+  overflow: visible;
+}
+
+.sr-frame-play {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 5;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sr-muted);
+  cursor: pointer;
+  transform: translateX(-50%);
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 180ms var(--sr-ease);
+}
+
+.sr-frame-play:hover,
+.sr-frame-play:focus-visible {
+  background: var(--sr-surface);
+  color: var(--sr-ink);
+}
+
+.sr-frame-play:active {
+  transform: translateX(-50%) scale(.94);
+}
+
+.sr-frame-play svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.6;
+}
+
 .sr-frame-control {
   display: inline-flex;
   align-items: center;
@@ -721,15 +763,17 @@ svg {
   border-radius: 4px;
   background: var(--sr-surface);
   transition:
-    flex-basis 260ms var(--sr-ease),
     border-color 180ms ease,
     transform 180ms var(--sr-ease),
     opacity 180ms ease;
 }
 
-.sr-timeline-item:hover,
+.sr-timeline-item:hover {
+  border-color: var(--sr-line-strong);
+  transform: translateY(-3px);
+}
+
 .sr-timeline-item:focus-within {
-  flex-basis: 95px;
   border-color: var(--sr-line-strong);
 }
 
@@ -738,20 +782,24 @@ svg {
   transform: translateY(-3px);
 }
 
-.sr-timeline-item-selected {
-  border-color: var(--sr-ink);
+.sr-timeline-item-selected,
+.sr-timeline-item-active {
+  border-color: var(--sr-line-strong);
   box-shadow: none;
 }
 
+.sr-timeline-item-selected::before,
 .sr-timeline-item-active::before {
   position: absolute;
   top: -1px;
   right: -1px;
   left: -1px;
-  z-index: 2;
+  z-index: 4;
   height: 2px;
+  border-radius: 4px 4px 0 0;
   background: var(--sr-accent);
   content: "";
+  pointer-events: none;
 }
 
 .sr-drop-before::after,
@@ -790,6 +838,10 @@ svg {
   background: transparent;
   text-align: left;
   cursor: grab;
+}
+
+.sr-timeline-select:focus-visible {
+  outline: none;
 }
 
 .sr-thumbnail {
@@ -1009,38 +1061,6 @@ svg {
   font-variant-numeric: tabular-nums;
 }
 
-.sr-number-field {
-  display: flex;
-  height: 34px;
-  align-items: center;
-  margin-top: 8px;
-  border: 1px solid var(--sr-line);
-  border-radius: 3px;
-  background: white;
-}
-
-.sr-number-field:focus-within {
-  border-color: var(--sr-ink);
-}
-
-.sr-number-field input {
-  width: 70px;
-  min-width: 70px;
-  height: 100%;
-  flex: 0 0 70px;
-  padding: 0 9px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  font-variant-numeric: tabular-nums;
-}
-
-.sr-number-field span {
-  padding-right: 0;
-  color: var(--sr-quiet);
-  font-size: 10px;
-}
-
 .sr-control input[type="range"] {
   --sr-range-progress: 0%;
   appearance: none;
@@ -1057,7 +1077,7 @@ svg {
 .sr-control input[type="range"]::-webkit-slider-runnable-track {
   height: 6px;
   border: 1px solid #717887;
-  border-radius: 999px;
+  border-radius: 2px;
   background: linear-gradient(
     to right,
     var(--sr-ink) 0 var(--sr-range-progress),
@@ -1072,7 +1092,7 @@ svg {
   -webkit-appearance: none;
   appearance: none;
   border: 2px solid var(--sr-surface);
-  border-radius: 50%;
+  border-radius: 4px;
   background: #111111;
   box-shadow: 0 1px 3px rgba(24, 24, 27, .34);
   transition: transform 240ms cubic-bezier(.22, 1, .36, 1);
@@ -1086,13 +1106,13 @@ svg {
 .sr-control input[type="range"]::-moz-range-track {
   height: 4px;
   border: 1px solid #717887;
-  border-radius: 999px;
+  border-radius: 2px;
   background: #eef0f3;
 }
 
 .sr-control input[type="range"]::-moz-range-progress {
   height: 4px;
-  border-radius: 999px 0 0 999px;
+  border-radius: 1px 0 0 1px;
   background: var(--sr-ink);
 }
 
@@ -1100,7 +1120,7 @@ svg {
   width: 14px;
   height: 14px;
   border: 2px solid var(--sr-surface);
-  border-radius: 50%;
+  border-radius: 4px;
   background: #111111;
   box-shadow: 0 1px 3px rgba(24, 24, 27, .34);
   transition: transform 240ms cubic-bezier(.22, 1, .36, 1);
@@ -1123,18 +1143,13 @@ svg {
   position: relative;
   width: 27px;
   height: 27px;
-  border: 1px solid rgba(24, 24, 27, .16);
-  border-radius: 50%;
+  border: 1px solid var(--sr-line-strong);
+  border-radius: 4px;
   cursor: pointer;
 }
 
-.sr-swatch {
-  box-shadow: inset 0 0 0 2px white;
-}
-
 .sr-swatch-selected {
-  outline: 1px solid var(--sr-ink);
-  outline-offset: 2px;
+  border-color: var(--sr-ink);
 }
 
 .sr-color-picker {
@@ -1159,7 +1174,7 @@ svg {
   width: 15px;
   height: 15px;
   place-items: center;
-  border-radius: 50%;
+  border-radius: 3px;
   background: rgba(0, 0, 0, .45);
   font-size: 11px;
   pointer-events: none;
